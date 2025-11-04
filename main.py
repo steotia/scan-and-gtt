@@ -1,6 +1,7 @@
 """
-NSE Delivery Tracker Main Application - Refactored
+NSE Delivery Tracker Main Application
 Entry point for the delivery spike detection system
+WITH SMART VOLUME FILTER INTEGRATION
 """
 
 import asyncio
@@ -28,16 +29,21 @@ logger.add(
 
 # Import components
 from src.config.manager import ConfigurationManager, AppConfig
-from src.data.fetcher import NSEDataFetcherFactory, DataSource
+from src.data.fetcher_delivery import DeliveryDataFetcher
 from src.data.repository import DataRepositoryFactory
 from src.analysis.engine import DeliveryAnalysisEngine, AdvancedSpikeDetector
 from src.analysis.filters import (
-    FilterFactory, VolumeFilter, DeliveryPercentFilter, 
-    IndexFilter, PriceRangeFilter, CompositeFilter
+    VolumeFilter, DeliveryPercentFilter, 
+    IndexFilter, PriceRangeFilter, CompositeFilter, SectorFilter
+)
+from src.analysis.smart_volume_filter import (
+    SmartVolumeFilter,
+    SmartDeliveryVolumeFilter,
+    create_smart_filter
 )
 from src.reporting.excel_generator import ExcelReportGenerator
 from src.interfaces import IDataFetcher, IDataRepository, IAnalysisEngine, IReportGenerator
-from src.interfaces import IFilterStrategy
+
 
 class NSEDeliveryTracker:
     """
@@ -269,60 +275,76 @@ class NSEDeliveryTracker:
         return self.report_generator.generate(analysis_results, output_path)
 
 
-def create_filters(config: AppConfig) -> List[IFilterStrategy]:
+def create_filters(config: AppConfig, mode: str = 'normal') -> List:
     """
     Create filter list based on configuration
     Single place to create filters - no duplication
+    Now includes Smart Volume Filter
     
     Args:
         config: Application configuration
+        mode: Filter mode ('conservative', 'normal', 'aggressive')
         
     Returns:
         List of filter strategies
     """
     filters = []
     
-    if config.min_volume > 0:
+    # Smart Volume Filter (NEW - Add this first for efficiency)
+    if hasattr(config, 'use_smart_volume_filter') and config.use_smart_volume_filter:
+        smart_filter = SmartVolumeFilter(
+            mode=mode,
+            index_filter=config.index_filter if hasattr(config, 'index_filter') else None,
+            lookback_days=config.lookback_days,
+            enable_logging=config.debug_mode if hasattr(config, 'debug_mode') else False
+        )
+        filters.append(smart_filter)
+        logger.info(f"Added Smart Volume Filter (mode: {mode})")
+    elif config.min_volume > 0:
+        # Only use simple volume filter if smart filter is disabled
         filters.append(VolumeFilter(config.min_volume))
-        
+        logger.info(f"Added Simple Volume Filter (min: {config.min_volume})")
+    
     if config.min_delivery_percent > 0:
         filters.append(DeliveryPercentFilter(config.min_delivery_percent))
         
-    if config.index_filter and config.index_filter != "ALL":
+    if hasattr(config, 'index_filter') and config.index_filter and config.index_filter != "ALL":
         filters.append(IndexFilter(config.index_filter))
         
-    if config.price_range:
+    if hasattr(config, 'price_range') and config.price_range:
         filters.append(PriceRangeFilter(
             config.price_range.get("min", 0),
             config.price_range.get("max", float('inf'))
         ))
     
-    if config.sectors:
-        from src.analysis.filters import SectorFilter
+    if hasattr(config, 'sectors') and config.sectors:
         filters.append(SectorFilter(config.sectors))
+    
+    # Optional: Combined Delivery-Volume Filter
+    if hasattr(config, 'use_delivery_volume_correlation') and config.use_delivery_volume_correlation:
+        delivery_volume_filter = SmartDeliveryVolumeFilter(
+            volume_filter=smart_filter if hasattr(config, 'use_smart_volume_filter') and config.use_smart_volume_filter else None,
+            min_delivery_percent=config.min_delivery_percent
+        )
+        filters.append(delivery_volume_filter)
+        logger.info("Added Delivery-Volume Correlation Filter")
     
     return filters
 
 
-def create_app(config: AppConfig) -> NSEDeliveryTracker:
+def create_app(config: AppConfig, mode: str = 'normal') -> NSEDeliveryTracker:
     """
     Factory function to create the application with all dependencies
-    Now takes AppConfig directly instead of loading it
+    Now takes AppConfig directly and supports filter modes
     
     Args:
         config: Application configuration object
+        mode: Filter mode ('conservative', 'normal', 'aggressive')
         
     Returns:
         Configured NSEDeliveryTracker instance
     """
-    # # Create data fetcher
-    # data_fetcher = NSEDataFetcherFactory.create(
-    #     DataSource[config.data_source],
-    #     cache=None
-    # )
-
-    # CORRECT - Use the working jugaad-data fetcher
-    from src.data.fetcher_delivery import DeliveryDataFetcher
+    # Create data fetcher using the working delivery fetcher
     data_fetcher = DeliveryDataFetcher(cache_dir=config.data_directory)
     
     # Create data repository
@@ -331,11 +353,11 @@ def create_app(config: AppConfig) -> NSEDeliveryTracker:
         base_path=config.data_directory
     )
     
-    # Create filters using the centralized function
-    filters = create_filters(config)
+    # Create filters using the centralized function with mode
+    filters = create_filters(config, mode)
     
     # Create analysis engine
-    if config.debug_mode:
+    if hasattr(config, 'debug_mode') and config.debug_mode:
         analysis_engine = AdvancedSpikeDetector(z_score_threshold=3.0)
     else:
         analysis_engine = DeliveryAnalysisEngine(filters=filters)
@@ -365,13 +387,18 @@ def create_app(config: AppConfig) -> NSEDeliveryTracker:
                                 'NIFTY_BANK', 'NIFTY_IT', 'NIFTY_PHARMA', 'NIFTY_AUTO',
                                 'NIFTY_FMCG', 'NIFTY_METAL', 'NIFTY_REALTY', 'NIFTY_ENERGY']), 
               help='Index filter')
+@click.option('--mode', type=click.Choice(['conservative', 'normal', 'aggressive']),
+              default='normal', help='Filter mode for smart volume filter')
+@click.option('--smart-volume/--no-smart-volume', default=True,
+              help='Use smart volume filter (default: enabled)')
 @click.option('--config', '-c', default='config.yaml', help='Configuration file path')
 @click.option('--output', '-o', help='Output report path')
 @click.option('--no-fetch', is_flag=True, help='Use only existing data, do not fetch new data')
 @click.option('--debug', is_flag=True, help='Enable debug mode')
-def main(date, lookback, multiplier, index, config, output, no_fetch, debug):
+def main(date, lookback, multiplier, index, mode, smart_volume, config, output, no_fetch, debug):
     """
     NSE Delivery Tracker - Detect unusual delivery spikes in NSE stocks
+    Now with Smart Volume Filtering
     """
     # Enable debug logging if requested
     if debug:
@@ -383,7 +410,6 @@ def main(date, lookback, multiplier, index, config, output, no_fetch, debug):
     app_config = config_manager.get_config()
     
     # Override configuration with CLI arguments
-    # This happens BEFORE creating the app
     if lookback:
         app_config.lookback_days = lookback
     if multiplier:
@@ -391,14 +417,19 @@ def main(date, lookback, multiplier, index, config, output, no_fetch, debug):
     if index:
         app_config.index_filter = index
     
-    # Now create app with the updated configuration
-    app = create_app(app_config)
+    # Add smart volume filter settings
+    app_config.use_smart_volume_filter = smart_volume
+    app_config.filter_mode = mode
+    
+    # Create app with the updated configuration and mode
+    app = create_app(app_config, mode)
     
     # Parse date
     analysis_date = date.date() if date else None
     
     # Run analysis
     logger.info("Starting NSE Delivery Tracker...")
+    logger.info(f"Mode: {mode}, Smart Volume: {'Enabled' if smart_volume else 'Disabled'}")
     
     try:
         # Run async analysis
@@ -417,17 +448,19 @@ def main(date, lookback, multiplier, index, config, output, no_fetch, debug):
                 # Print summary
                 spikes = results.get('spikes', [])
                 if spikes:
-                    click.echo("\n" + "="*50)
+                    click.echo("\n" + "="*60)
                     click.echo("TOP 10 DELIVERY SPIKES")
-                    click.echo("="*50)
+                    click.echo("="*60)
                     
                     for i, spike in enumerate(spikes[:10], 1):
                         click.echo(f"{i}. {spike.symbol}: {spike.spike_ratio:.1f}x spike "
                                  f"(Delivery: {spike.current_delivery:,} vs Avg: {spike.avg_delivery:,.0f})")
                     
-                    click.echo("="*50)
+                    click.echo("="*60)
+                    click.echo(f"\nReport saved to: {output or app_config.reports_directory}")
                 else:
                     click.echo("No delivery spikes found matching the criteria.")
+                    click.echo(f"Try: --mode aggressive or lower --multiplier value")
             else:
                 logger.error("Failed to generate report")
                 sys.exit(1)
@@ -437,6 +470,9 @@ def main(date, lookback, multiplier, index, config, output, no_fetch, debug):
             
     except Exception as e:
         logger.error(f"Application error: {e}")
+        if debug:
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
 
 
