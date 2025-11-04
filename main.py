@@ -374,6 +374,189 @@ def create_app(config: AppConfig, mode: str = 'normal') -> NSEDeliveryTracker:
         report_generator=report_generator
     )
 
+"""
+Enhanced Dashboard Display for main.py
+Add this to your main.py after the analysis completes
+"""
+
+def print_analysis_dashboard(results: dict, app: NSEDeliveryTracker):
+    """
+    Print comprehensive analysis dashboard with spikes and filter details
+    """
+    from tabulate import tabulate
+    import pandas as pd
+    
+    # ANSI color codes for terminal
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    
+    print("\n" + "="*100)
+    print(f"{BOLD}{CYAN}📊 NSE DELIVERY ANALYSIS DASHBOARD{RESET}")
+    print("="*100)
+    
+    # 1. Summary Statistics
+    print(f"\n{BOLD}📈 SUMMARY STATISTICS{RESET}")
+    print("-"*50)
+    
+    analysis_date = results.get('analysis_date', 'N/A')
+    total_stocks = results.get('total_stocks', 0)
+    spikes = results.get('spikes', [])
+    spike_multiplier = results.get('spike_multiplier', 5.0)
+    lookback_days = results.get('lookback_days', 20)
+    filters_desc = results.get('filters_description', 'None')
+    
+    summary_data = [
+        ["Analysis Date", analysis_date],
+        ["Total Stocks Analyzed", total_stocks],
+        ["Delivery Spikes Found", len(spikes)],
+        ["Spike Threshold", f"{spike_multiplier}x"],
+        ["Lookback Period", f"{lookback_days} days"],
+        ["Active Filters", filters_desc]
+    ]
+    
+    for item in summary_data:
+        print(f"  {item[0]:25} : {BOLD}{item[1]}{RESET}")
+    
+    # 2. Smart Volume Filter Metrics (if available)
+    if hasattr(app.analysis_engine, 'filters'):
+        for filter_obj in app.analysis_engine.filters:
+            if hasattr(filter_obj, 'get_metrics'):  # SmartVolumeFilter
+                print(f"\n{BOLD}🎯 SMART VOLUME FILTER METRICS{RESET}")
+                print("-"*50)
+                
+                metrics_df = filter_obj.get_metrics()
+                if not metrics_df.empty:
+                    # Show passed stocks
+                    passed = metrics_df[metrics_df['passed'] == True].head(10)
+                    if not passed.empty:
+                        print(f"\n{GREEN}✅ Top Stocks Passing Volume Filter:{RESET}")
+                        print(tabulate(
+                            passed[['symbol', 'price', 'turnover_cr', 'rvol', 'bracket']],
+                            headers=['Symbol', 'Price', 'Turnover(Cr)', 'RVOL', 'Bracket'],
+                            tablefmt='simple',
+                            floatfmt=('.0f', '.2f', '.2f', '.2f', '.s')
+                        ))
+                    
+                    # Show failed stocks
+                    failed = metrics_df[metrics_df['passed'] == False].head(5)
+                    if not failed.empty:
+                        print(f"\n{RED}❌ Sample Stocks Filtered Out:{RESET}")
+                        print(tabulate(
+                            failed[['symbol', 'price', 'turnover_cr', 'reason']],
+                            headers=['Symbol', 'Price', 'Turnover(Cr)', 'Reason'],
+                            tablefmt='simple',
+                            floatfmt=('.0f', '.2f', '.2f', '.s')
+                        ))
+                
+                # Get statistics
+                if hasattr(filter_obj, 'get_statistics'):
+                    stats = filter_obj.get_statistics()
+                    if stats:
+                        print(f"\n{YELLOW}📊 Filter Statistics:{RESET}")
+                        print(f"  Pass Rate: {stats.get('pass_rate', 0):.1f}%")
+                        print(f"  Avg RVOL (Passed): {stats.get('avg_rvol_passed', 0):.2f}x")
+                        print(f"  Total Turnover (Passed): ₹{stats.get('total_turnover_passed_cr', 0):.1f} Cr")
+    
+    # 3. Top Delivery Spikes
+    print(f"\n{BOLD}🚀 TOP DELIVERY SPIKES{RESET}")
+    print("-"*50)
+    
+    if spikes:
+        spike_data = []
+        for i, spike in enumerate(spikes[:15], 1):  # Show top 15
+            # Color code based on spike ratio
+            if spike.spike_ratio >= 10:
+                color = RED
+                indicator = "🔥"
+            elif spike.spike_ratio >= 7:
+                color = YELLOW
+                indicator = "⚡"
+            elif spike.spike_ratio >= 5:
+                color = GREEN
+                indicator = "📈"
+            else:
+                color = CYAN
+                indicator = "📊"
+            
+            spike_data.append([
+                f"{i}",
+                f"{indicator} {spike.symbol}",
+                f"{spike.spike_ratio:.1f}x",
+                f"{spike.current_delivery:,}",
+                f"{spike.avg_delivery:,.0f}",
+                f"{spike.price_change:+.1f}%",
+                f"{spike.volume_change:+.1f}%"
+            ])
+        
+        headers = ["#", "Symbol", "Spike", "Current Del", "Avg Del", "Price Δ", "Volume Δ"]
+        print(tabulate(spike_data, headers=headers, tablefmt='simple'))
+        
+        # Highlight extreme spikes
+        extreme_spikes = [s for s in spikes if s.spike_ratio >= 10]
+        if extreme_spikes:
+            print(f"\n{RED}{BOLD}🔥 EXTREME SPIKES (>10x):{RESET}")
+            for spike in extreme_spikes[:5]:
+                print(f"  • {spike.symbol}: {spike.spike_ratio:.1f}x spike!")
+    else:
+        print(f"{YELLOW}No delivery spikes found with current filters.{RESET}")
+        print("\nPossible reasons:")
+        print("  • Spike multiplier too high (try --multiplier 2 or 3)")
+        print("  • Smart volume filter too strict (try --mode aggressive)")
+        print("  • Market-wide low delivery day")
+    
+    # 4. Market Overview (if raw data available)
+    raw_data = results.get('raw_data')
+    if raw_data is not None and not raw_data.empty:
+        print(f"\n{BOLD}🌍 MARKET OVERVIEW{RESET}")
+        print("-"*50)
+        
+        if 'delivery_percent' in raw_data.columns:
+            # Delivery distribution
+            delivery_bins = [0, 20, 40, 60, 80, 100]
+            delivery_dist = pd.cut(raw_data['delivery_percent'], bins=delivery_bins).value_counts().sort_index()
+            
+            print(f"\n{CYAN}Delivery % Distribution:{RESET}")
+            for range_label, count in delivery_dist.items():
+                bar = "█" * int(count / max(delivery_dist) * 20)
+                print(f"  {str(range_label):15} {bar} {count}")
+        
+        # Top delivery stocks (not necessarily spikes)
+        if 'delivery_qty' in raw_data.columns:
+            top_delivery = raw_data.nlargest(5, 'delivery_qty')[['symbol', 'delivery_qty', 'delivery_percent']]
+            print(f"\n{CYAN}Highest Delivery Volumes:{RESET}")
+            for _, row in top_delivery.iterrows():
+                print(f"  • {row['symbol']:12} : {row['delivery_qty']:12,} ({row['delivery_percent']:.1f}%)")
+    
+    # 5. Recommendations
+    print(f"\n{BOLD}💡 RECOMMENDATIONS{RESET}")
+    print("-"*50)
+    
+    if len(spikes) == 0:
+        print(f"{YELLOW}To find more spikes, try:{RESET}")
+        print("  1. Lower spike multiplier: --multiplier 2")
+        print("  2. Use aggressive mode: --mode aggressive")
+        print("  3. Remove smart filter: --no-smart-volume")
+        print("  4. Try different index: --index MIDCAP or SMALLCAP")
+    elif len(spikes) < 5:
+        print(f"{YELLOW}To find more opportunities:{RESET}")
+        print("  1. Lower spike threshold: --multiplier 3")
+        print("  2. Expand search: --index ALL")
+        print("  3. Use normal mode: --mode normal")
+    else:
+        print(f"{GREEN}Good number of spikes found!{RESET}")
+        print("  1. Review top 5 for immediate opportunities")
+        print("  2. Check price-volume correlation")
+        print("  3. Verify with technical indicators")
+    
+    print("\n" + "="*100)
+    print(f"{BOLD}📝 Report saved to: {results.get('report_path', 'reports/')}{RESET}")
+    print("="*100 + "\n")
+
 
 @click.command()
 @click.option('--date', '-d', type=click.DateTime(formats=['%Y-%m-%d']), 
@@ -398,7 +581,7 @@ def create_app(config: AppConfig, mode: str = 'normal') -> NSEDeliveryTracker:
 def main(date, lookback, multiplier, index, mode, smart_volume, config, output, no_fetch, debug):
     """
     NSE Delivery Tracker - Detect unusual delivery spikes in NSE stocks
-    Now with Smart Volume Filtering
+    Now with Smart Volume Filtering and Enhanced Dashboard
     """
     # Enable debug logging if requested
     if debug:
@@ -420,6 +603,11 @@ def main(date, lookback, multiplier, index, mode, smart_volume, config, output, 
     # Add smart volume filter settings
     app_config.use_smart_volume_filter = smart_volume
     app_config.filter_mode = mode
+    app_config.debug_mode = debug
+    
+    # Log configuration
+    logger.info(f"Configuration: Mode={mode}, Smart Volume={smart_volume}, "
+                f"Multiplier={app_config.spike_multiplier}, Index={app_config.index_filter}")
     
     # Create app with the updated configuration and mode
     app = create_app(app_config, mode)
@@ -439,33 +627,44 @@ def main(date, lookback, multiplier, index, mode, smart_volume, config, output, 
         ))
         
         if results:
-            # Generate report
+            # Store report path in results for dashboard
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if not output:
+                output = f"{app_config.reports_directory}/nse_delivery_report_{timestamp}.xlsx"
+            results['report_path'] = output
+            
+            # Generate Excel report
             success = app.generate_report(results, output)
             
             if success:
                 logger.success("Analysis completed successfully!")
                 
-                # Print summary
+                # Print the enhanced dashboard
+                print_analysis_dashboard(results, app)
+                
+                # Also print simple summary if no dashboard
                 spikes = results.get('spikes', [])
-                if spikes:
-                    click.echo("\n" + "="*60)
-                    click.echo("TOP 10 DELIVERY SPIKES")
-                    click.echo("="*60)
-                    
-                    for i, spike in enumerate(spikes[:10], 1):
-                        click.echo(f"{i}. {spike.symbol}: {spike.spike_ratio:.1f}x spike "
-                                 f"(Delivery: {spike.current_delivery:,} vs Avg: {spike.avg_delivery:,.0f})")
-                    
-                    click.echo("="*60)
-                    click.echo(f"\nReport saved to: {output or app_config.reports_directory}")
-                else:
-                    click.echo("No delivery spikes found matching the criteria.")
-                    click.echo(f"Try: --mode aggressive or lower --multiplier value")
+                if not spikes:
+                    print("\n" + "="*60)
+                    print("ℹ️  NO SPIKES FOUND - TROUBLESHOOTING TIPS")
+                    print("="*60)
+                    print(f"Current settings:")
+                    print(f"  - Spike Multiplier: {app_config.spike_multiplier}x")
+                    print(f"  - Mode: {mode}")
+                    print(f"  - Smart Volume: {smart_volume}")
+                    print(f"  - Index Filter: {app_config.index_filter}")
+                    print(f"\nTry these commands:")
+                    print(f"  1. Lower threshold: python main.py --date {analysis_date} --multiplier 2")
+                    print(f"  2. Aggressive mode: python main.py --date {analysis_date} --mode aggressive --multiplier 3")
+                    print(f"  3. No filters: python main.py --date {analysis_date} --no-smart-volume --multiplier 2")
+                    print(f"  4. All stocks: python main.py --date {analysis_date} --index ALL --multiplier 2")
+                    print("="*60)
             else:
                 logger.error("Failed to generate report")
                 sys.exit(1)
         else:
             logger.error("No analysis results generated")
+            logger.info("Check if data exists for the selected date")
             sys.exit(1)
             
     except Exception as e:
