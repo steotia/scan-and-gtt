@@ -37,7 +37,7 @@ from src.analysis.filters import (
 )
 from src.reporting.excel_generator import ExcelReportGenerator
 from src.interfaces import IDataFetcher, IDataRepository, IAnalysisEngine, IReportGenerator
-
+from src.interfaces import IFilterStrategy
 
 class NSEDeliveryTracker:
     """
