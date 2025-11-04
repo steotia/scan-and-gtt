@@ -25,7 +25,7 @@ venv.bak/
 *.sublime-workspace
 
 # Project specific data directories
-data/
+/data/
 reports/
 logs/
 *.log
