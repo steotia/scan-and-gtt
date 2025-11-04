@@ -1,0 +1,58 @@
+# NSE Delivery Tracker Configuration
+
+# Data Fetching
+data_source: NSE_BHAVCOPY
+retry_count: 3
+rate_limit_delay: 1.0
+
+# Analysis Parameters
+lookback_days: 20
+spike_multiplier: 5.0
+min_volume: 100000
+min_delivery_percent: 30.0
+price_range:
+  min: 10.0
+  max: 50000.0
+
+# Storage
+storage_type: csv  # Options: csv, sqlite
+data_directory: data
+reports_directory: reports
+logs_directory: logs
+
+# Filtering
+index_filter: ALL  # Options: ALL, NIFTY_50, NIFTY_100
+sectors: []  # Leave empty for all sectors
+market_cap:
+  - LARGE
+  - MID
+
+# Reporting
+report_format: excel
+include_charts: true
+max_spikes_in_report: 50
+
+# Email Notifications
+email_enabled: false
+smtp_server: smtp.gmail.com
+smtp_port: 587
+email_from: ""
+email_to: []
+# email_password: Set via NSE_EMAIL_PASSWORD environment variable
+
+# Scheduling
+schedule_enabled: false
+schedule_time: "18:00"
+schedule_days:
+  - MON
+  - TUE
+  - WED
+  - THU
+  - FRI
+
+# Advanced
+use_cache: true
+cache_ttl: 3600
+parallel_processing: true
+max_workers: 4
+debug_mode: false

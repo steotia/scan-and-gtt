@@ -1,0 +1,36 @@
+# Essential dependencies
+click>=8.1.0
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+pyyaml>=6.0
+
+# Data fetching
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Excel and reporting
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Logging and configuration
+loguru>=0.7.0
+python-dotenv>=1.0.0
+
+# Date handling
+python-dateutil>=2.8.0
+pytz>=2023.3
+
+# Data validation (optional)
+pydantic>=2.0.0
+
+# Statistical analysis
+scipy>=1.10.0
+
+# Optional: for better display
+tabulate>=0.9.0
+
+# Note: sqlite3 is built into Python, no need to install separately
+# Note: Removed testing and development tools for simpler setup
