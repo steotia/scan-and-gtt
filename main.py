@@ -374,16 +374,15 @@ def create_app(config: AppConfig, mode: str = 'normal') -> NSEDeliveryTracker:
         report_generator=report_generator
     )
 
-"""
-Enhanced Dashboard Display for main.py
-Add this to your main.py after the analysis completes
-"""
-
-def print_analysis_dashboard(results: dict, app: NSEDeliveryTracker):
+def print_analysis_dashboard(results: dict, app):
     """
     Print comprehensive analysis dashboard with spikes and filter details
     """
-    from tabulate import tabulate
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        # Fallback if tabulate not installed
+        tabulate = None
     import pandas as pd
     
     # ANSI color codes for terminal
@@ -429,72 +428,103 @@ def print_analysis_dashboard(results: dict, app: NSEDeliveryTracker):
                 print(f"\n{BOLD}🎯 SMART VOLUME FILTER METRICS{RESET}")
                 print("-"*50)
                 
-                metrics_df = filter_obj.get_metrics()
-                if not metrics_df.empty:
-                    # Show passed stocks
-                    passed = metrics_df[metrics_df['passed'] == True].head(10)
-                    if not passed.empty:
-                        print(f"\n{GREEN}✅ Top Stocks Passing Volume Filter:{RESET}")
-                        print(tabulate(
-                            passed[['symbol', 'price', 'turnover_cr', 'rvol', 'bracket']],
-                            headers=['Symbol', 'Price', 'Turnover(Cr)', 'RVOL', 'Bracket'],
-                            tablefmt='simple',
-                            floatfmt=('.0f', '.2f', '.2f', '.2f', '.s')
-                        ))
+                try:
+                    metrics_df = filter_obj.get_metrics()
+                    if not metrics_df.empty:
+                        # Show passed stocks
+                        passed = metrics_df[metrics_df['passed'] == True].head(10)
+                        if not passed.empty:
+                            print(f"\n{GREEN}✅ Top Stocks Passing Volume Filter:{RESET}")
+                            if tabulate:
+                                # Fixed: Use proper float formatting
+                                table_data = []
+                                for _, row in passed.iterrows():
+                                    table_data.append([
+                                        row['symbol'],
+                                        f"{row['price']:.2f}",
+                                        f"{row['turnover_cr']:.2f}",
+                                        f"{row['rvol']:.2f}",
+                                        row['bracket']
+                                    ])
+                                print(tabulate(
+                                    table_data,
+                                    headers=['Symbol', 'Price', 'Turnover(Cr)', 'RVOL', 'Bracket'],
+                                    tablefmt='simple'
+                                ))
+                            else:
+                                # Fallback without tabulate
+                                for _, row in passed.iterrows():
+                                    print(f"  {row['symbol']:12} | Price: ₹{row['price']:8.2f} | "
+                                          f"TO: ₹{row['turnover_cr']:6.2f}Cr | RVOL: {row['rvol']:.2f}x | "
+                                          f"{row['bracket']}")
+                        
+                        # Show failed stocks
+                        failed = metrics_df[metrics_df['passed'] == False].head(5)
+                        if not failed.empty:
+                            print(f"\n{RED}❌ Sample Stocks Filtered Out:{RESET}")
+                            if tabulate:
+                                table_data = []
+                                for _, row in failed.iterrows():
+                                    table_data.append([
+                                        row['symbol'],
+                                        f"{row['price']:.2f}",
+                                        f"{row['turnover_cr']:.2f}",
+                                        row['reason'][:50]  # Truncate long reasons
+                                    ])
+                                print(tabulate(
+                                    table_data,
+                                    headers=['Symbol', 'Price', 'Turnover(Cr)', 'Reason'],
+                                    tablefmt='simple'
+                                ))
+                            else:
+                                for _, row in failed.iterrows():
+                                    print(f"  {row['symbol']:12} | ₹{row['price']:8.2f} | {row['reason'][:50]}")
                     
-                    # Show failed stocks
-                    failed = metrics_df[metrics_df['passed'] == False].head(5)
-                    if not failed.empty:
-                        print(f"\n{RED}❌ Sample Stocks Filtered Out:{RESET}")
-                        print(tabulate(
-                            failed[['symbol', 'price', 'turnover_cr', 'reason']],
-                            headers=['Symbol', 'Price', 'Turnover(Cr)', 'Reason'],
-                            tablefmt='simple',
-                            floatfmt=('.0f', '.2f', '.2f', '.s')
-                        ))
-                
-                # Get statistics
-                if hasattr(filter_obj, 'get_statistics'):
-                    stats = filter_obj.get_statistics()
-                    if stats:
-                        print(f"\n{YELLOW}📊 Filter Statistics:{RESET}")
-                        print(f"  Pass Rate: {stats.get('pass_rate', 0):.1f}%")
-                        print(f"  Avg RVOL (Passed): {stats.get('avg_rvol_passed', 0):.2f}x")
-                        print(f"  Total Turnover (Passed): ₹{stats.get('total_turnover_passed_cr', 0):.1f} Cr")
+                    # Get statistics
+                    if hasattr(filter_obj, 'get_statistics'):
+                        stats = filter_obj.get_statistics()
+                        if stats:
+                            print(f"\n{YELLOW}📊 Filter Statistics:{RESET}")
+                            print(f"  Total Stocks: {stats.get('total_stocks', 0)}")
+                            print(f"  Passed: {stats.get('passed', 0)}")
+                            print(f"  Failed: {stats.get('failed', 0)}")
+                            print(f"  Pass Rate: {stats.get('pass_rate', 0):.1f}%")
+                            print(f"  Avg RVOL (Passed): {stats.get('avg_rvol_passed', 0):.2f}x")
+                            print(f"  Total Turnover (Passed): ₹{stats.get('total_turnover_passed_cr', 0):.1f} Cr")
+                            
+                            # Show failure reasons
+                            if 'failure_reasons' in stats and stats['failure_reasons']:
+                                print(f"\n{YELLOW}Failure Reasons:{RESET}")
+                                for reason, count in list(stats['failure_reasons'].items())[:5]:
+                                    print(f"  • {reason}: {count} stocks")
+                except Exception as e:
+                    print(f"  Error displaying filter metrics: {e}")
     
     # 3. Top Delivery Spikes
     print(f"\n{BOLD}🚀 TOP DELIVERY SPIKES{RESET}")
     print("-"*50)
     
     if spikes:
-        spike_data = []
-        for i, spike in enumerate(spikes[:15], 1):  # Show top 15
-            # Color code based on spike ratio
-            if spike.spike_ratio >= 10:
-                color = RED
-                indicator = "🔥"
-            elif spike.spike_ratio >= 7:
-                color = YELLOW
-                indicator = "⚡"
-            elif spike.spike_ratio >= 5:
-                color = GREEN
-                indicator = "📈"
-            else:
-                color = CYAN
-                indicator = "📊"
+        if tabulate:
+            spike_data = []
+            for i, spike in enumerate(spikes[:15], 1):
+                spike_data.append([
+                    f"{i}",
+                    spike.symbol,
+                    f"{spike.spike_ratio:.1f}x",
+                    f"{spike.current_delivery:,}",
+                    f"{spike.avg_delivery:,.0f}",
+                    f"{spike.price_change:+.1f}%",
+                    f"{spike.volume_change:+.1f}%"
+                ])
             
-            spike_data.append([
-                f"{i}",
-                f"{indicator} {spike.symbol}",
-                f"{spike.spike_ratio:.1f}x",
-                f"{spike.current_delivery:,}",
-                f"{spike.avg_delivery:,.0f}",
-                f"{spike.price_change:+.1f}%",
-                f"{spike.volume_change:+.1f}%"
-            ])
-        
-        headers = ["#", "Symbol", "Spike", "Current Del", "Avg Del", "Price Δ", "Volume Δ"]
-        print(tabulate(spike_data, headers=headers, tablefmt='simple'))
+            headers = ["#", "Symbol", "Spike", "Current Del", "Avg Del", "Price Δ", "Volume Δ"]
+            print(tabulate(spike_data, headers=headers, tablefmt='simple'))
+        else:
+            # Fallback without tabulate
+            for i, spike in enumerate(spikes[:15], 1):
+                print(f"{i:2}. {spike.symbol:12} | Spike: {spike.spike_ratio:5.1f}x | "
+                      f"Del: {spike.current_delivery:10,} | Avg: {spike.avg_delivery:10,.0f}")
         
         # Highlight extreme spikes
         extreme_spikes = [s for s in spikes if s.spike_ratio >= 10]
@@ -507,7 +537,8 @@ def print_analysis_dashboard(results: dict, app: NSEDeliveryTracker):
         print("\nPossible reasons:")
         print("  • Spike multiplier too high (try --multiplier 2 or 3)")
         print("  • Smart volume filter too strict (try --mode aggressive)")
-        print("  • Market-wide low delivery day")
+        print("  • Not enough historical data for comparison")
+        print("  • Try disabling smart volume: --no-smart-volume")
     
     # 4. Market Overview (if raw data available)
     raw_data = results.get('raw_data')
@@ -515,46 +546,42 @@ def print_analysis_dashboard(results: dict, app: NSEDeliveryTracker):
         print(f"\n{BOLD}🌍 MARKET OVERVIEW{RESET}")
         print("-"*50)
         
-        if 'delivery_percent' in raw_data.columns:
-            # Delivery distribution
-            delivery_bins = [0, 20, 40, 60, 80, 100]
-            delivery_dist = pd.cut(raw_data['delivery_percent'], bins=delivery_bins).value_counts().sort_index()
-            
-            print(f"\n{CYAN}Delivery % Distribution:{RESET}")
-            for range_label, count in delivery_dist.items():
-                bar = "█" * int(count / max(delivery_dist) * 20)
-                print(f"  {str(range_label):15} {bar} {count}")
+        print(f"Latest Date Stocks: {len(raw_data)}")
         
-        # Top delivery stocks (not necessarily spikes)
-        if 'delivery_qty' in raw_data.columns:
-            top_delivery = raw_data.nlargest(5, 'delivery_qty')[['symbol', 'delivery_qty', 'delivery_percent']]
-            print(f"\n{CYAN}Highest Delivery Volumes:{RESET}")
+        if 'delivery_percent' in raw_data.columns:
+            # Top delivery stocks
+            top_delivery = raw_data.nlargest(5, 'delivery_percent')[['symbol', 'delivery_qty', 'delivery_percent']]
+            print(f"\n{CYAN}Highest Delivery % Stocks:{RESET}")
             for _, row in top_delivery.iterrows():
                 print(f"  • {row['symbol']:12} : {row['delivery_qty']:12,} ({row['delivery_percent']:.1f}%)")
     
-    # 5. Recommendations
+    # 5. Debug Information
+    print(f"\n{BOLD}🔍 DEBUG INFORMATION{RESET}")
+    print("-"*50)
+    print(f"Total records loaded: {results.get('total_stocks', 0)}")
+    print(f"After filters: Check logs above")
+    print(f"Date being analyzed: {results.get('analysis_date', 'Unknown')}")
+    
+    # 6. Recommendations
     print(f"\n{BOLD}💡 RECOMMENDATIONS{RESET}")
     print("-"*50)
     
     if len(spikes) == 0:
-        print(f"{YELLOW}To find more spikes, try:{RESET}")
-        print("  1. Lower spike multiplier: --multiplier 2")
-        print("  2. Use aggressive mode: --mode aggressive")
-        print("  3. Remove smart filter: --no-smart-volume")
-        print("  4. Try different index: --index MIDCAP or SMALLCAP")
+        print(f"{YELLOW}No spikes found. Try these commands:{RESET}")
+        print(f"  1. Lower multiplier: python main.py --date {results.get('analysis_date')} --multiplier 2")
+        print(f"  2. Aggressive mode: python main.py --date {results.get('analysis_date')} --mode aggressive --multiplier 3")
+        print(f"  3. No smart filter: python main.py --date {results.get('analysis_date')} --no-smart-volume --multiplier 2")
+        print(f"  4. All stocks, minimal filter: python main.py --date {results.get('analysis_date')} --index ALL --no-smart-volume --multiplier 2")
     elif len(spikes) < 5:
-        print(f"{YELLOW}To find more opportunities:{RESET}")
+        print(f"{YELLOW}Few spikes found. To find more:{RESET}")
         print("  1. Lower spike threshold: --multiplier 3")
-        print("  2. Expand search: --index ALL")
-        print("  3. Use normal mode: --mode normal")
+        print("  2. Use aggressive mode: --mode aggressive")
     else:
         print(f"{GREEN}Good number of spikes found!{RESET}")
-        print("  1. Review top 5 for immediate opportunities")
-        print("  2. Check price-volume correlation")
-        print("  3. Verify with technical indicators")
+        print("  Review top 5 for opportunities")
     
     print("\n" + "="*100)
-    print(f"{BOLD}📝 Report saved to: {results.get('report_path', 'reports/')}{RESET}")
+    print(f"{BOLD}📝 Report: {results.get('report_path', 'reports/')}{RESET}")
     print("="*100 + "\n")
 
 
