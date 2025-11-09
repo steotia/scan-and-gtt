@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 """
-Export ALL stocks with smart filter analysis and Market Cap Classification
-Shows what the smart filter is doing for every stock with Large/Mid/Small cap info
+COMPLETE UPDATED VERSION of analyze_all_stocks_with_mcap.py
+Includes:
+- Step 1: 2 decimal places for all numbers
+- Step 2: Report named by analysis date
+- Step 3: Delivery/volume/turnover change percentages
 """
 
 import pandas as pd
@@ -71,11 +74,12 @@ async def analyze_all_stocks_with_filter(analysis_date=None, output_file=None):
     """
     
     if analysis_date is None:
-        analysis_date = date(2025, 11, 4)
+        analysis_date = date(2025, 11, 7)
     
+    # STEP 2 CHANGE: Use analysis date in filename
     if output_file is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"smart_filter_analysis_with_mcap_{timestamp}.xlsx"
+        date_str = analysis_date.strftime("%Y-%m-%d")
+        output_file = f"analysis_{date_str}.xlsx"
     
     print("="*80)
     print(f"SMART FILTER ANALYSIS WITH MARKET CAP - {analysis_date}")
@@ -147,30 +151,31 @@ async def analyze_all_stocks_with_filter(analysis_date=None, output_file=None):
                 if not stock_data.empty:
                     stock = stock_data.iloc[0]
                     
+                    # STEP 1 CHANGE: Round all numbers to 2 decimal places
                     analysis_results.append({
                         'mode': filter_mode,
                         'symbol': metric.symbol,
                         'market_cap': stock.get('market_cap', 'UNKNOWN'),
                         'index_membership': stock.get('index_membership', 'UNKNOWN'),
-                        'close': stock.get('close', metric.current_price),
-                        'volume': stock.get('volume', metric.current_volume),
-                        'delivery_qty': stock.get('delivery_qty', 0),
-                        'delivery_percent': stock.get('delivery_percent', 0),
-                        'current_turnover_cr': metric.current_turnover / 1_00_00_000,
-                        'avg_turnover_cr': metric.avg_turnover / 1_00_00_000,
-                        'rvol': metric.relative_volume,
-                        'turnover_ratio': metric.turnover_ratio,
+                        'close': round(stock.get('close', metric.current_price), 2),
+                        'volume': int(stock.get('volume', metric.current_volume)),
+                        'delivery_qty': int(stock.get('delivery_qty', 0)),
+                        'delivery_percent': round(stock.get('delivery_percent', 0), 2),
+                        'current_turnover_cr': round(metric.current_turnover / 1_00_00_000, 2),
+                        'avg_turnover_cr': round(metric.avg_turnover / 1_00_00_000, 2),
+                        'rvol': round(metric.relative_volume, 2),
+                        'turnover_ratio': round(metric.turnover_ratio, 2),
                         'price_bracket': metric.bracket,
                         'passes_filter': metric.passes_filter,
                         'filter_reason': metric.failure_reason or 'PASSED',
-                        'vwap': stock.get('vwap', stock.get('close', 0))
+                        'vwap': round(stock.get('vwap', stock.get('close', 0)), 2)
                     })
     
     # Convert to DataFrame
     results_df = pd.DataFrame(analysis_results)
     
-    # Calculate spike ratios (need historical data)
-    print("\n4. Calculating delivery spike ratios...")
+    # STEP 3 CHANGE: Calculate delivery/volume/turnover changes
+    print("\n4. Calculating delivery spike ratios and changes...")
     
     # Get historical data for spike calculation
     historical_data = all_data[all_data['date'] < latest_date]
@@ -183,43 +188,79 @@ async def analyze_all_stocks_with_filter(analysis_date=None, output_file=None):
             market_cap = mcap_info.get('market_cap', 'UNKNOWN')
             index_membership = mcap_info.get('index_membership', 'UNKNOWN')
             
-            # Current delivery
+            # Current values
             current = latest_data[latest_data['symbol'] == symbol].iloc[0]
             current_delivery = current.get('delivery_qty', 0)
+            current_volume = current.get('volume', 0)
+            current_close = current.get('close', 0)
+            current_turnover = (current_close * current_volume) / 1_00_00_000  # In crores
             
-            # Historical average
+            # Historical averages
             hist = historical_data[historical_data['symbol'] == symbol]
-            if len(hist) >= 5 and current_delivery > 0:
+            if len(hist) >= 5:
                 avg_delivery = hist['delivery_qty'].mean()
+                avg_volume = hist['volume'].mean()
+                avg_close = hist['close'].mean()
+                avg_turnover = (avg_close * avg_volume) / 1_00_00_000  # In crores
+                
+                # Calculate ratios and changes
                 if avg_delivery > 0:
                     spike_ratio = current_delivery / avg_delivery
+                    delivery_change_pct = ((current_delivery - avg_delivery) / avg_delivery) * 100
                 else:
                     spike_ratio = 0
+                    delivery_change_pct = 0
+                
+                if avg_volume > 0:
+                    volume_change_pct = ((current_volume - avg_volume) / avg_volume) * 100
+                else:
+                    volume_change_pct = 0
+                
+                if avg_turnover > 0:
+                    turnover_change_pct = ((current_turnover - avg_turnover) / avg_turnover) * 100
+                else:
+                    turnover_change_pct = 0
             else:
                 spike_ratio = 0
                 avg_delivery = 0
+                avg_volume = 0
+                avg_turnover = 0
+                delivery_change_pct = 0
+                volume_change_pct = 0
+                turnover_change_pct = 0
             
             spike_data.append({
                 'symbol': symbol,
                 'market_cap': market_cap,
                 'index_membership': index_membership,
-                'current_delivery': current_delivery,
-                'avg_delivery': avg_delivery,
-                'spike_ratio': spike_ratio,
+                'current_delivery': int(current_delivery),
+                'avg_delivery': round(avg_delivery, 0),
+                'spike_ratio': round(spike_ratio, 2),
+                'delivery_change_pct': round(delivery_change_pct, 2),
+                'current_volume': int(current_volume),
+                'avg_volume': round(avg_volume, 0),
+                'volume_change_pct': round(volume_change_pct, 2),
+                'current_turnover_cr': round(current_turnover, 2),
+                'avg_turnover_cr': round(avg_turnover, 2),
+                'turnover_change_pct': round(turnover_change_pct, 2),
                 'is_spike_5x': spike_ratio >= 5,
                 'is_spike_3x': spike_ratio >= 3,
                 'is_spike_2x': spike_ratio >= 2
             })
-        except:
+        except Exception as e:
             continue
     
     spike_df = pd.DataFrame(spike_data)
     
     # Merge spike data with filter results
     if not results_df.empty and not spike_df.empty:
-        # Drop market_cap columns from spike_df to avoid duplication
-        spike_df_merge = spike_df.drop(['market_cap', 'index_membership'], axis=1)
-        results_df = results_df.merge(spike_df_merge, on='symbol', how='left')
+        # Select columns to merge (avoid duplicates)
+        merge_cols = ['symbol', 'spike_ratio', 'delivery_change_pct', 'volume_change_pct', 
+                     'turnover_change_pct', 'current_volume', 'avg_volume', 
+                     'current_turnover_cr', 'avg_turnover_cr', 
+                     'is_spike_5x', 'is_spike_3x', 'is_spike_2x']
+        spike_df_merge = spike_df[merge_cols]
+        results_df = results_df.merge(spike_df_merge, on='symbol', how='left', suffixes=('', '_spike'))
     
     # Create Excel with multiple sheets
     print(f"\n5. Creating Excel report: {output_file}")
@@ -232,35 +273,25 @@ async def analyze_all_stocks_with_filter(analysis_date=None, output_file=None):
             'bold': True,
             'bg_color': '#4A90E2',
             'font_color': 'white',
-            'border': 1
+            'border': 1,
+            'align': 'center'
         })
         
-        largecap_format = workbook.add_format({
-            'bg_color': '#E8F5E9',  # Light green
-            'border': 1
-        })
+        # Number formats
+        decimal2_format = workbook.add_format({'num_format': '0.00', 'border': 1})
+        integer_format = workbook.add_format({'num_format': '#,##0', 'border': 1})
+        percent_format = workbook.add_format({'num_format': '0.00%', 'border': 1})
         
-        midcap_format = workbook.add_format({
-            'bg_color': '#FFF3E0',  # Light orange
-            'border': 1
-        })
-        
-        smallcap_format = workbook.add_format({
-            'bg_color': '#FCE4EC',  # Light pink
-            'border': 1
-        })
+        # Color formats for different market caps
+        largecap_format = workbook.add_format({'bg_color': '#E8F5E9', 'border': 1})
+        midcap_format = workbook.add_format({'bg_color': '#FFF3E0', 'border': 1})
+        smallcap_format = workbook.add_format({'bg_color': '#FCE4EC', 'border': 1})
         
         # 1. Summary Sheet with Market Cap breakdown
         summary_data = []
         for mode in ['conservative', 'normal', 'aggressive']:
             mode_data = results_df[results_df['mode'] == mode]
             if not mode_data.empty:
-                # Overall stats
-                passed = mode_data['passes_filter'].sum()
-                failed = len(mode_data) - passed
-                pass_rate = (passed / len(mode_data)) * 100
-                
-                # Market cap breakdown
                 for mcap in ['LARGE CAP', 'MID CAP', 'SMALL CAP', 'MICRO CAP']:
                     mcap_data = mode_data[mode_data['market_cap'] == mcap]
                     if not mcap_data.empty:
@@ -268,7 +299,6 @@ async def analyze_all_stocks_with_filter(analysis_date=None, output_file=None):
                         mcap_total = len(mcap_data)
                         mcap_pass_rate = (mcap_passed / mcap_total * 100) if mcap_total > 0 else 0
                         
-                        # Spikes in this category
                         if 'is_spike_3x' in mcap_data.columns:
                             mcap_spikes = mcap_data['is_spike_3x'].sum()
                             mcap_spikes_passed = mcap_data[mcap_data['passes_filter'] & mcap_data['is_spike_3x']].shape[0]
@@ -281,13 +311,22 @@ async def analyze_all_stocks_with_filter(analysis_date=None, output_file=None):
                             'Market Cap': mcap,
                             'Total Stocks': mcap_total,
                             'Passed Filter': mcap_passed,
-                            'Pass Rate %': mcap_pass_rate,
+                            'Pass Rate %': round(mcap_pass_rate, 2),
                             '3x Spikes': mcap_spikes,
                             '3x Spikes Passed': mcap_spikes_passed
                         })
         
         summary_df = pd.DataFrame(summary_data)
         summary_df.to_excel(writer, sheet_name='Summary by Market Cap', index=False)
+        
+        # Apply formatting to Summary sheet
+        worksheet = writer.sheets['Summary by Market Cap']
+        for col_num, col_name in enumerate(summary_df.columns):
+            worksheet.write(0, col_num, col_name, header_format)
+            if 'Rate' in col_name:
+                worksheet.set_column(col_num, col_num, 12, decimal2_format)
+            elif 'Total' in col_name or 'Passed' in col_name or 'Spikes' in col_name:
+                worksheet.set_column(col_num, col_num, 12, integer_format)
         
         # 2. Normal Mode Results (Most Important)
         normal_df = results_df[results_df['mode'] == 'normal'].copy()
@@ -299,86 +338,64 @@ async def analyze_all_stocks_with_filter(analysis_date=None, output_file=None):
             normal_df.sort_values(['spike_ratio', 'mcap_order'], ascending=[False, True], inplace=True)
             normal_df.drop('mcap_order', axis=1, inplace=True)
             
-            # Reorder columns for better readability
-            column_order = ['symbol', 'market_cap', 'index_membership', 'spike_ratio', 'passes_filter', 
-                           'close', 'volume', 'delivery_percent', 'current_turnover_cr', 
-                           'rvol', 'price_bracket', 'filter_reason']
+            # Write to Excel
+            normal_df.to_excel(writer, sheet_name='Normal Mode', index=False)
+            
+            # Format Normal Mode sheet
+            worksheet = writer.sheets['Normal Mode']
+            for col_num, col_name in enumerate(normal_df.columns):
+                worksheet.write(0, col_num, col_name, header_format)
+        
+        # 3. Top Spikes with Changes
+        if not spike_df.empty:
+            # Sort by spike ratio and get top 50
+            top_spikes = spike_df.sort_values('spike_ratio', ascending=False).head(50)
+            
+            # Reorder columns for clarity
+            spike_cols_order = [
+                'symbol', 'market_cap', 'index_membership',
+                'spike_ratio', 
+                'delivery_change_pct', 'volume_change_pct', 'turnover_change_pct',
+                'current_delivery', 'avg_delivery',
+                'current_volume', 'avg_volume',
+                'current_turnover_cr', 'avg_turnover_cr',
+                'is_spike_3x', 'is_spike_2x'
+            ]
             
             # Only include columns that exist
-            column_order = [col for col in column_order if col in normal_df.columns]
-            other_cols = [col for col in normal_df.columns if col not in column_order]
-            normal_df = normal_df[column_order + other_cols]
+            spike_cols_order = [col for col in spike_cols_order if col in top_spikes.columns]
+            top_spikes = top_spikes[spike_cols_order]
             
-            normal_df.to_excel(writer, sheet_name='Normal Mode', index=False)
-        
-        # 3. Large Cap Analysis
-        largecap_df = results_df[results_df['market_cap'] == 'LARGE CAP'].copy()
-        if not largecap_df.empty:
-            largecap_df.sort_values(['spike_ratio', 'mode'], ascending=[False, True], inplace=True)
-            largecap_df.to_excel(writer, sheet_name='Large Cap Stocks', index=False)
-        
-        # 4. Mid Cap Analysis
-        midcap_df = results_df[results_df['market_cap'] == 'MID CAP'].copy()
-        if not midcap_df.empty:
-            midcap_df.sort_values(['spike_ratio', 'mode'], ascending=[False, True], inplace=True)
-            midcap_df.to_excel(writer, sheet_name='Mid Cap Stocks', index=False)
-        
-        # 5. Small Cap Analysis
-        smallcap_df = results_df[results_df['market_cap'] == 'SMALL CAP'].copy()
-        if not smallcap_df.empty:
-            smallcap_df.sort_values(['spike_ratio', 'mode'], ascending=[False, True], inplace=True)
-            smallcap_df.to_excel(writer, sheet_name='Small Cap Stocks', index=False)
-        
-        # 6. Top Spikes by Market Cap
-        if not spike_df.empty:
-            spike_df.sort_values('spike_ratio', ascending=False, inplace=True)
+            top_spikes.to_excel(writer, sheet_name='Top Spikes with Changes', index=False)
             
-            # Add which modes passed the filter
-            for idx, row in spike_df.iterrows():
-                symbol = row['symbol']
-                passes_modes = []
-                for mode in ['conservative', 'normal', 'aggressive']:
-                    mode_data = results_df[(results_df['symbol'] == symbol) & (results_df['mode'] == mode)]
-                    if not mode_data.empty and mode_data.iloc[0]['passes_filter']:
-                        passes_modes.append(mode[0].upper())  # C/N/A
-                spike_df.at[idx, 'passes_modes'] = ''.join(passes_modes) if passes_modes else 'NONE'
-            
-            # Reorder columns
-            spike_cols = ['symbol', 'market_cap', 'index_membership', 'spike_ratio', 
-                         'passes_modes', 'current_delivery', 'avg_delivery']
-            spike_df = spike_df[[col for col in spike_cols if col in spike_df.columns]]
-            
-            spike_df.to_excel(writer, sheet_name='All Spikes by MCap', index=False)
+            # Format Top Spikes sheet
+            worksheet = writer.sheets['Top Spikes with Changes']
+            for col_num, col_name in enumerate(top_spikes.columns):
+                worksheet.write(0, col_num, col_name, header_format)
+                if 'pct' in col_name or 'percent' in col_name:
+                    worksheet.set_column(col_num, col_num, 15, decimal2_format)
+                elif 'ratio' in col_name or '_cr' in col_name:
+                    worksheet.set_column(col_num, col_num, 12, decimal2_format)
+                elif 'volume' in col_name or 'delivery' in col_name:
+                    worksheet.set_column(col_num, col_num, 14, integer_format)
     
     print(f"\n✅ Analysis complete! Report saved to: {output_file}")
     
     # Print summary
     print("\n" + "="*80)
-    print("SUMMARY BY MARKET CAP")
+    print("SUMMARY")
     print("="*80)
     
-    print("\nFilter Pass Rates by Market Cap (Normal Mode):")
-    normal_data = results_df[results_df['mode'] == 'normal']
-    for mcap in ['LARGE CAP', 'MID CAP', 'SMALL CAP', 'MICRO CAP']:
-        mcap_data = normal_data[normal_data['market_cap'] == mcap]
-        if not mcap_data.empty:
-            passed = mcap_data['passes_filter'].sum()
-            total = len(mcap_data)
-            print(f"  {mcap:12}: {passed:3}/{total:3} passed ({passed/total*100:5.1f}%)")
-    
-    print("\nTop 10 Delivery Spikes by Market Cap:")
+    print("\nTop 10 Delivery Spikes with Changes:")
     if not spike_df.empty:
+        print(f"{'Symbol':12} {'MCap':10} {'Spike':8} {'Del Δ%':10} {'Vol Δ%':10} {'TO Δ%':10}")
+        print("-"*70)
         for idx, row in spike_df.head(10).iterrows():
-            passes = row.get('passes_modes', 'NONE')
-            print(f"  {row['symbol']:12} ({row['market_cap']:10}): {row['spike_ratio']:6.2f}x | Passes: {passes}")
-    
-    print("\nMarket Cap Performance:")
-    for mcap in ['LARGE CAP', 'MID CAP', 'SMALL CAP']:
-        mcap_spikes = spike_df[(spike_df['market_cap'] == mcap) & (spike_df['spike_ratio'] >= 3)]
-        if not mcap_spikes.empty:
-            print(f"\n  {mcap} with 3x+ spikes: {len(mcap_spikes)} stocks")
-            for _, row in mcap_spikes.head(3).iterrows():
-                print(f"    • {row['symbol']}: {row['spike_ratio']:.2f}x ({row['index_membership']})")
+            print(f"{row['symbol']:12} {row['market_cap']:10} "
+                  f"{row['spike_ratio']:8.2f}x "
+                  f"{row['delivery_change_pct']:+9.2f}% "
+                  f"{row['volume_change_pct']:+9.2f}% "
+                  f"{row['turnover_change_pct']:+9.2f}%")
     
     return results_df
 
@@ -390,18 +407,15 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         analysis_date = date.fromisoformat(sys.argv[1])
     else:
-        analysis_date = date(2025, 11, 4)
+        analysis_date = date(2025, 11, 7)
     
     print(f"Analyzing {analysis_date} with Market Cap classification...")
     
     # Run analysis
     results = asyncio.run(analyze_all_stocks_with_filter(analysis_date))
     
-    print("\n📊 Open the Excel file to see:")
-    print("  • Summary by Market Cap: Breakdown by Large/Mid/Small")
-    print("  • Normal Mode: All stocks with MCap info")
-    print("  • Large/Mid/Small Cap sheets: Filtered by market cap")
-    print("  • All Spikes by MCap: Shows market cap for every spike")
-    print("\n✨ New columns added:")
-    print("  • market_cap: LARGE CAP / MID CAP / SMALL CAP / MICRO CAP")
-    print("  • index_membership: NIFTY 50, NIFTY MIDCAP 150, etc.")
+    print("\n📊 Report Features:")
+    print("  ✅ Numbers rounded to 2 decimal places")
+    print("  ✅ Report named with analysis date")
+    print("  ✅ Delivery/Volume/Turnover change % added")
+    print("  ✅ Market cap classification included")

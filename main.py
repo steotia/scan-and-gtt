@@ -584,10 +584,37 @@ def print_analysis_dashboard(results: dict, app):
     print(f"{BOLD}📝 Report: {results.get('report_path', 'reports/')}{RESET}")
     print("="*100 + "\n")
 
+def get_previous_trading_day(from_date):
+    """Get the previous trading day (skip weekends and holidays)"""
+    # Basic NSE holidays for 2025 (extend as needed)
+    nse_holidays_2025 = [
+        date(2025, 1, 26),   # Republic Day
+        date(2025, 3, 14),   # Holi
+        date(2025, 3, 31),   # Ram Navami
+        date(2025, 4, 14),   # Ambedkar Jayanti
+        date(2025, 4, 18),   # Good Friday
+        date(2025, 5, 1),    # Maharashtra Day
+        date(2025, 8, 15),   # Independence Day
+        date(2025, 8, 27),   # Ganesh Chaturthi
+        date(2025, 10, 2),   # Gandhi Jayanti
+        date(2025, 10, 21),  # Dussehra
+        date(2025, 11, 10),  # Diwali
+        date(2025, 11, 11),  # Diwali (Balipratipada)
+        date(2025, 11, 12),  # Bhai Dooj
+        date(2025, 12, 25),  # Christmas
+    ]
+    
+    previous = from_date - timedelta(days=1)
+    
+    # Skip weekends and holidays
+    while previous.weekday() >= 5 or previous in nse_holidays_2025:
+        previous -= timedelta(days=1)
+    
+    return previous
 
 @click.command()
 @click.option('--date', '-d', type=click.DateTime(formats=['%Y-%m-%d']), 
-              help='Analysis date (YYYY-MM-DD)')
+              help='Analysis date (YYYY-MM-DD). If not specified, uses previous trading day.')
 @click.option('--lookback', '-l', type=int, help='Lookback days for average calculation')
 @click.option('--multiplier', '-m', type=float, help='Spike multiplier threshold')
 @click.option('--index', '-i', 
@@ -608,7 +635,7 @@ def print_analysis_dashboard(results: dict, app):
 def main(date, lookback, multiplier, index, mode, smart_volume, config, output, no_fetch, debug):
     """
     NSE Delivery Tracker - Detect unusual delivery spikes in NSE stocks
-    Now with Smart Volume Filtering and Enhanced Dashboard
+    Enhanced with Smart Date Selection
     """
     # Enable debug logging if requested
     if debug:
@@ -632,19 +659,56 @@ def main(date, lookback, multiplier, index, mode, smart_volume, config, output, 
     app_config.filter_mode = mode
     app_config.debug_mode = debug
     
+    # ========== SMART DATE HANDLING ==========
+    if date:
+        # User specified a date
+        analysis_date = date.date()
+        logger.info(f"Using specified date: {analysis_date}")
+    else:
+        # Auto-detect the right date to analyze
+        today = date.today()
+        now = datetime.now()
+        market_close_time = now.replace(hour=15, minute=30, second=0)
+        data_available_time = now.replace(hour=16, minute=0, second=0)
+        
+        # Check if today is a weekend
+        if today.weekday() >= 5:
+            # It's weekend, use last Friday
+            analysis_date = get_previous_trading_day(today)
+            logger.info(f"Weekend detected. Using last trading day: {analysis_date}")
+        
+        # Check if market has closed and data is available
+        elif now >= data_available_time:
+            # Market closed, check if today's data exists
+            today_file = Path(f"data/{today.year}/{today.month:02d}/nse_data_{today}.csv")
+            
+            if today_file.exists():
+                analysis_date = today
+                logger.info(f"Using today's data: {analysis_date}")
+            else:
+                # Today's data not available yet
+                analysis_date = get_previous_trading_day(today)
+                logger.info(f"Today's data not available. Using: {analysis_date}")
+                
+                # Try to fetch today's data if not in no-fetch mode
+                if not no_fetch and today.weekday() < 5:
+                    logger.info(f"Will attempt to fetch today's data ({today}) during analysis...")
+        else:
+            # Market still open or data not yet available
+            analysis_date = get_previous_trading_day(today)
+            logger.info(f"Market hours: Using previous trading day: {analysis_date}")
+    # ========== END SMART DATE HANDLING ==========
+    
     # Log configuration
     logger.info(f"Configuration: Mode={mode}, Smart Volume={smart_volume}, "
                 f"Multiplier={app_config.spike_multiplier}, Index={app_config.index_filter}")
+    logger.info(f"Analysis Date: {analysis_date}")
     
     # Create app with the updated configuration and mode
     app = create_app(app_config, mode)
     
-    # Parse date
-    analysis_date = date.date() if date else None
-    
     # Run analysis
     logger.info("Starting NSE Delivery Tracker...")
-    logger.info(f"Mode: {mode}, Smart Volume: {'Enabled' if smart_volume else 'Disabled'}")
     
     try:
         # Run async analysis
@@ -654,8 +718,8 @@ def main(date, lookback, multiplier, index, mode, smart_volume, config, output, 
         ))
         
         if results:
-            # Store report path in results for dashboard
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Generate report with analysis date in filename
+            timestamp = analysis_date.strftime("%Y%m%d")
             if not output:
                 output = f"{app_config.reports_directory}/nse_delivery_report_{timestamp}.xlsx"
             results['report_path'] = output
@@ -669,29 +733,20 @@ def main(date, lookback, multiplier, index, mode, smart_volume, config, output, 
                 # Print the enhanced dashboard
                 print_analysis_dashboard(results, app)
                 
-                # Also print simple summary if no dashboard
+                # Print tips if no spikes found
                 spikes = results.get('spikes', [])
                 if not spikes:
                     print("\n" + "="*60)
-                    print("ℹ️  NO SPIKES FOUND - TROUBLESHOOTING TIPS")
+                    print("NO SPIKES FOUND - TIPS")
                     print("="*60)
-                    print(f"Current settings:")
-                    print(f"  - Spike Multiplier: {app_config.spike_multiplier}x")
-                    print(f"  - Mode: {mode}")
-                    print(f"  - Smart Volume: {smart_volume}")
-                    print(f"  - Index Filter: {app_config.index_filter}")
-                    print(f"\nTry these commands:")
-                    print(f"  1. Lower threshold: python main.py --date {analysis_date} --multiplier 2")
-                    print(f"  2. Aggressive mode: python main.py --date {analysis_date} --mode aggressive --multiplier 3")
-                    print(f"  3. No filters: python main.py --date {analysis_date} --no-smart-volume --multiplier 2")
-                    print(f"  4. All stocks: python main.py --date {analysis_date} --index ALL --multiplier 2")
+                    print(f"Analysis Date: {analysis_date}")
+                    print(f"Try: python main.py --date {analysis_date} --multiplier 2 --no-smart-volume")
                     print("="*60)
             else:
                 logger.error("Failed to generate report")
                 sys.exit(1)
         else:
             logger.error("No analysis results generated")
-            logger.info("Check if data exists for the selected date")
             sys.exit(1)
             
     except Exception as e:
